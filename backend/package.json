@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "agent": "nodemon --exec tsx src/server.ts"
+    "agent": "tsx watch src/server.ts"
   },
   "keywords": [],
   "author": "",

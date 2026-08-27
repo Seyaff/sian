@@ -27,7 +27,7 @@ export class AgentService {
     messages.push(...result.responseMessages);
 
     for(const part of result.content) {
-      console.log("Result Context is this", part)
+     
 
       if(part.type === "tool-approval-request" && !part.isAutomatic) {
 
@@ -45,6 +45,8 @@ export class AgentService {
 
         
         messages.push({ role: 'tool', content: approvals });
+
+        
 
         return response
 
