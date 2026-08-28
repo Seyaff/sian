@@ -1,12 +1,12 @@
 import { Router } from "express";
-import { WhatsAppController } from "./whatsapp.controller";
-import { AgentService } from "../agent/agent.service";
+import { whatsappController } from "./whatsapp.module";
 
-const whatsappRoutes = Router();
-const agentService = new AgentService();
-const whatsappController = new WhatsAppController(agentService);
+const whatsappRoutes = Router()
 
-whatsappRoutes.get("/webhook", whatsappController.verifyWebhook);
-whatsappRoutes.post("/webhook", whatsappController.handleWebhook);
 
-export default whatsappRoutes;
+
+whatsappRoutes.get("/test" , whatsappController.test)
+whatsappRoutes.get("/webhook" , whatsappController.verifyWebhook)
+whatsappRoutes.post("/webhook" , whatsappController.handleWebhook)
+
+export default whatsappRoutes

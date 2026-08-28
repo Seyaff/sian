@@ -7,13 +7,14 @@ export class AgentController {
   constructor(private agentService: AgentService) { }
 
 
-
   chat = asyncHandler(async (req: Request, res: Response) => {
-    const { query } = req.body;
+    const { query, sessionId = "default", restaurantId, phone } = req.body;
 
+    const response = await this.agentService.chat(sessionId, query, {
+      restaurantId,
+      phone,
+    });
 
-    const response = await this.agentService.chat(query);
-console.log("Response from controller : " , response)
 
     return res.status(HTTPSTATUS.OK).json({
       message: response.status === "REQUIRES_APPROVAL"
@@ -24,9 +25,15 @@ console.log("Response from controller : " , response)
   });
 
   handleApproval = asyncHandler(async (req: Request, res: Response) => {
-    const { approvalId, approved, reason } = req.body;
+    const { sessionId = "default", approvalId, approved, reason, restaurantId, phone } = req.body;
 
-    const response = await this.agentService.respondToApproval(approvalId, approved, reason);
+    const response = await this.agentService.respondToApproval(
+      sessionId,
+      approvalId,
+      approved,
+      reason,
+      { restaurantId, phone }
+    );
 
     return res.status(HTTPSTATUS.OK).json({
       message: "Approval processed",

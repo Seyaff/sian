@@ -2,83 +2,82 @@ import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler.middleware";
 import { HTTPSTATUS } from "../../config/http.config";
 import { Env } from "../../config/app.config";
-import { AgentService } from "../agent/agent.service";
+import { whatsappService } from "./whatsapp.module";
 
-export class WhatsAppController {
-  constructor(private agentService: AgentService) {}
+export class WhatsappController {
+  test = asyncHandler(async (_req: Request, res: Response) => {
+    return res.status(HTTPSTATUS.OK).json({
+      message: "This was a test",
+    });
+  });
 
-  // 1. GET: Webhook Verification
   verifyWebhook = asyncHandler(async (req: Request, res: Response) => {
-    const mode = req.query["hub.mode"];
-    const token = req.query["hub.verify_token"];
+    const mode = Array.isArray(req.query["hub.mode"])
+      ? req.query["hub.mode"][0]
+      : req.query["hub.mode"];
+
+    const token = Array.isArray(req.query["hub.verify_token"])
+      ? req.query["hub.verify_token"][0]
+      : req.query["hub.verify_token"];
+
     const challenge = req.query["hub.challenge"];
 
     if (mode === "subscribe" && token === Env.WHATSAPP_VERIFY_TOKEN) {
-      console.log("[WHATSAPP] Webhook verified successfully.");
+      console.log("[WHATSAPP VERIFY SUCCESS] Returning challenge back to Meta:", challenge);
       return res.status(HTTPSTATUS.OK).send(challenge);
     }
 
+    console.error("[WHATSAPP VERIFY FAILED] Mismatch detected. Sending 403.");
     return res.sendStatus(403);
   });
 
-  // 2. POST: Inbound Message Handling
   handleWebhook = asyncHandler(async (req: Request, res: Response) => {
-    // CRITICAL: Acknowledge Meta within 3 seconds to avoid retries
-    res.status(HTTPSTATUS.OK).send("EVENT_RECEIVED");
+    try {
+      const entry = req.body?.entry?.[0];
+      const changes = entry?.changes?.[0];
+      const value = changes?.value;
+      const messages = value?.messages;
+      const whatsappPhoneNumberId = value?.metadata?.phone_number_id;
 
-    const body = req.body;
+      if (messages && messages.length > 0) {
+        const message = messages[0];
+        const from = message.from;
+        const messageId = message.id;
 
-    if (body.object === "whatsapp_business_account") {
-      const entry = body.entry?.[0];
-      const change = entry?.changes?.[0]?.value;
-      const message = change?.messages?.[0];
+        if (message.type === "interactive") {
+          if (message.interactive?.type === "button_reply") {
+            const buttonId = message.interactive.button_reply.id;
+            console.log("[WHATSAPP BUTTON REPLY]", { from, buttonId, whatsappPhoneNumberId });
+            await whatsappService.handleInboundMessage(from, buttonId, {
+              whatsappPhoneNumberId,
+              messageId,
+              isInteractive: true,
+            });
+          } else if (message.interactive?.type === "list_reply") {
+            const listId = message.interactive.list_reply.id;
+            console.log("[WHATSAPP LIST REPLY]", { from, listId, whatsappPhoneNumberId });
+            await whatsappService.handleInboundMessage(from, listId, {
+              whatsappPhoneNumberId,
+              messageId,
+              isInteractive: true,
+            });
+          }
+        } else if (message.type === "text") {
+          const messageBody = message.text?.body;
 
-      if (message && message.type === "text") {
-        const from = message.from; // Phone number sending the message
-        const userQuery = message.text.body;
-
-        console.log(`[WHATSAPP INBOUND] From: ${from} | Query: ${userQuery}`);
-
-        // Async dispatch to Agent logic
-        this.processUserQuery(from, userQuery).catch((err) =>
-          console.error("[WHATSAPP AGENT ERROR]", err)
-        );
+          if (from && messageBody) {
+            console.log("[WHATSAPP TEXT MESSAGE]", { from, messageBody, whatsappPhoneNumberId });
+            await whatsappService.handleInboundMessage(from, messageBody, {
+              whatsappPhoneNumberId,
+              messageId,
+            });
+          }
+        }
       }
+    } catch (error) {
+      console.error("[WHATSAPP HANDLE ERROR]", error);
     }
+
+    return res.status(HTTPSTATUS.OK).send("EVENT_RECEIVED");
   });
-
-  private processUserQuery = async (from: string, query: string) => {
-    // Bridge inbound message to AgentService
-    const agentResponse = await this.agentService.chat(query);
-
-    let replyText = agentResponse.text;
-
-    // Handle tool approval fallback if an action requires manual review
-    if (agentResponse.status === "REQUIRES_APPROVAL") {
-      replyText = "Your request requires agent approval. Reference ID: " + agentResponse.approvalId;
-    }
-
-    if (replyText) {
-      await this.sendWhatsAppMessage(from, replyText);
-    }
-  };
-
-  private sendWhatsAppMessage = async (to: string, text: string) => {
-    const url = `https://graph.facebook.com/v20.0/${Env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
-
-    await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${Env.WHATSAPP_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to,
-        type: "text",
-        text: { body: text },
-      }),
-    });
-  };
 }
