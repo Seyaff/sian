@@ -1,93 +1,183 @@
-import { InvalidToolApprovalSignatureError, ModelMessage, ToolApprovalResponse } from "ai";
-import createUserAgent from "../../agents";
+import util from "util";
 
-interface CustomToolApprovalResponse extends ToolApprovalResponse {
-  status : string
-  toolCall : {
-    toolCallId : string,
-    toolName : string,
-   
-  }
+import { ModelMessage, ToolApprovalResponse } from "ai";
+import { createRestaurantAgent } from "../../agents";
+import { Env } from "../../config/app.config";
+import { CustomerService } from "../customer/customer.service";
+import { trimMessagesForAgent } from "../../utils/message-trim";
+import { memoryInjectorService } from "../../services/memory/memory-injector.service";
+import { profileExtractorService } from "../../services/memory/profile-extractor.service";
+import { CustomerEventRepository } from "../../repositories/customer-event/customer-event.repository";
+import {
+  getWhatsAppSession,
+  setPendingApproval,
+  clearPendingApproval,
+  appendMessages,
+  clearWhatsAppSession,
+} from "../../memory/whatsapp-session";
+import { SessionWriter } from "../../memory/session-writer";
+
+export interface AgentChatOptions {
+  restaurantId?: string;
+  phone?: string;
 }
 
-// NOTE: In production, load/persist these messages in Redis or your DB per conversation session.
-const messages: ModelMessage[] = [];
+export interface CustomToolApprovalResponse extends ToolApprovalResponse {
+  status: "REQUIRES_APPROVAL";
+  text?: string;
+  approvalId: string;
+  toolCall: {
+    toolCallId: string;
+    toolName: string;
+  };
+}
+
+export interface AgentCompletedResponse {
+  status: "COMPLETED";
+  text: string;
+  approvalId?: never;
+}
+
+export type AgentChatResponse = CustomToolApprovalResponse | AgentCompletedResponse;
 
 export class AgentService {
-  
-  // Turn 1: Process initial query
-  chat = async (query: string) => {
-    messages.push({ role: "user", content: query });
+  constructor(
+    private customerService = new CustomerService(),
+    private events = new CustomerEventRepository()
+  ) {}
 
-    const result = await createUserAgent.generate({ messages });
-    
+  private resolveRestaurantId(restaurantId?: string) {
+    return restaurantId || Env.DEFAULT_RESTAURANT_ID;
+  }
 
-    const approvals :CustomToolApprovalResponse[] = []
-   
-    messages.push(...result.responseMessages);
+  private async buildAgent(restaurantId: string, phone?: string) {
+    if (phone) {
+      const { customer, isNew } = await this.customerService.findOrCreate(phone, restaurantId);
+      const session = await getWhatsAppSession(phone, restaurantId);
+      const memoryBlock = memoryInjectorService.buildMemoryBlock(
+        customer,
+        session.sessionState,
+        isNew
+      );
+      const customerContext = this.customerService.toAgentContext(customer, isNew);
 
-    for(const part of result.content) {
-     
-
-      if(part.type === "tool-approval-request" && !part.isAutomatic) {
-
-        
-        const response : CustomToolApprovalResponse = {
-          status : "REQUIRES_APPROVAL",
-          type : "tool-approval-response",
-          approvalId : part.approvalId,
-          approved : false,
-          reason : "User will allow or deny the request",
-          toolCall : part.toolCall
-        }
-
-        approvals.push(response)
-
-        
-        messages.push({ role: 'tool', content: approvals });
-
-        
-
-        return response
-
-      }
+      return createRestaurantAgent({
+        restaurantId,
+        memoryBlock,
+        customer: {
+          phone: customerContext.phone,
+          isReturning: customerContext.isReturning,
+          ...(customerContext.name ? { name: customerContext.name } : {}),
+          ...(customerContext.preferences ? { preferences: customerContext.preferences } : {}),
+        },
+      });
     }
 
+    return createRestaurantAgent({ restaurantId });
+  }
 
+  private async postTurnMemoryUpdate(phone: string, restaurantId: string, text: string) {
+    await profileExtractorService.extractFromMessage(phone, restaurantId, text);
 
-   
-   
+    const qualifying = profileExtractorService.extractQualifyingAnswers(text);
+    if (Object.keys(qualifying).length > 0) {
+      const writer = new SessionWriter(phone, restaurantId);
+      const current = await writer.getSessionState();
+      await writer.updateSessionState({
+        qualifyingAnswers: { ...current.qualifyingAnswers, ...qualifying },
+      });
+    }
+  }
+
+  chat = async (
+    sessionId: string,
+    query: string,
+    options: AgentChatOptions = {}
+  ): Promise<AgentChatResponse> => {
+    const restaurantId = this.resolveRestaurantId(options.restaurantId);
+    const phone = options.phone ?? sessionId;
+    const session = await getWhatsAppSession(phone, restaurantId);
+    const userMessage: ModelMessage = { role: "user", content: query };
+    const messagesWithUser = trimMessagesForAgent([...session.messages, userMessage]);
+
+    await appendMessages(phone, restaurantId, [userMessage]);
+    await this.postTurnMemoryUpdate(phone, restaurantId, query);
+
+    const agent = await this.buildAgent(restaurantId, phone);
+    const result = await agent.generate({ messages: messagesWithUser });
+
+    await appendMessages(phone, restaurantId, result.responseMessages);
+    console.log(util.inspect(result, { depth: null, colors: true }));
+
+    for (const part of result.content) {
+      if (part.type === "tool-approval-request" && !part.isAutomatic) {
+        const response: CustomToolApprovalResponse = {
+          status: "REQUIRES_APPROVAL",
+          type: "tool-approval-response",
+          approvalId: part.approvalId,
+          approved: false,
+          reason: "User will allow or deny the request",
+          toolCall: part.toolCall,
+        };
+
+        await setPendingApproval(phone, restaurantId, part.approvalId, part.toolCall);
+        await appendMessages(phone, restaurantId, [{ role: "tool", content: [response] }]);
+
+        return response;
+      }
+    }
 
     return {
       status: "COMPLETED",
       text: result.text,
-      result : result
     };
   };
 
-  // Turn 2: Process Postman decision (Approve / Deny)
-  respondToApproval = async (approvalId: string, approved: boolean, reason?: string) => {
+  respondToApproval = async (
+    sessionId: string,
+    approvalId: string,
+    approved: boolean,
+    reason?: string,
+    options: AgentChatOptions = {}
+  ): Promise<AgentCompletedResponse> => {
+    const restaurantId = this.resolveRestaurantId(options.restaurantId);
+    const phone = options.phone ?? sessionId;
+
     const approvalPayload: ToolApprovalResponse[] = [
       {
         type: "tool-approval-response",
         approvalId,
         approved,
-        reason: reason || (approved ? "Approved via API" : "Denied by user"),
+        reason: reason || (approved ? "Approved via WhatsApp" : "Denied by user"),
       },
     ];
 
-    // Push tool approval decision to conversation history
-    messages.push({ role: "tool", content: approvalPayload });
+    await appendMessages(phone, restaurantId, [{ role: "tool", content: approvalPayload }]);
+    await clearPendingApproval(phone, restaurantId);
 
-    // Re-run the agent with the updated history
-    const result = await createUserAgent.generate({ messages });
+    const updatedSession = await getWhatsAppSession(phone, restaurantId);
+    const agent = await this.buildAgent(restaurantId, phone);
+    const result = await agent.generate({
+      messages: trimMessagesForAgent(updatedSession.messages),
+    });
 
-    // Append final execution history
-    messages.push(...result.responseMessages);
+    await appendMessages(phone, restaurantId, result.responseMessages);
+
+    if (approved && result.text) {
+      const writer = new SessionWriter(phone, restaurantId);
+      await writer.updateSessionState({ currentIntent: null, cartDraft: [] });
+    }
 
     return {
       status: "COMPLETED",
       text: result.text,
     };
+  };
+
+  getSession = async (phone: string, restaurantId?: string) =>
+    getWhatsAppSession(phone, this.resolveRestaurantId(restaurantId));
+
+  clearSession = async (phone: string, restaurantId?: string): Promise<void> => {
+    await clearWhatsAppSession(phone, this.resolveRestaurantId(restaurantId));
   };
 }

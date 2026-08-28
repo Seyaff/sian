@@ -6,7 +6,7 @@ import { tavily, } from "@tavily/core"
 import { Env } from "../config/app.config"
 
 
-const tavilInit = tavily({ apiKey:  "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" })
+const tavilInit = tavily({ apiKey: Env.API_KEY_OF_TAVILY })
 
 
 export const tavilyWebSearchTool = tool({

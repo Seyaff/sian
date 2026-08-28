@@ -20,11 +20,6 @@ export const createUserTool = tool({
   execute: async ({ name, email, password }, { context, toolCallId, abortSignal, messages }) => {
 
 
-    console.log(`The context is : ${context}`)
-    console.log(`The tool call Id is : ${toolCallId}`),
-      console.log(`This is the abortsignal . Im just loggin to see how it looks : ${abortSignal}`)
-    console.log(`The messages : ${messages}`)
-
     try {
       const user = await userRepo.createUser({ name, email, password });
       return { success: true, user }
