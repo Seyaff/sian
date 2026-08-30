@@ -1,5 +1,6 @@
 import { tool } from "ai";
 import { ReservationRepository } from "../../repositories/reservation/reservation.repository";
+import { cleanString } from "../../utils/zod-helpers";
 import { reserveTableInputSchema, restaurantContextSchema } from "../../validators/restaurant.validation";
 
 const reservationRepo = new ReservationRepository();
@@ -10,13 +11,15 @@ export const reserveTableTool = tool({
     "Book a table for the customer. Collect date, time, and party size before calling this tool.",
   inputSchema: reserveTableInputSchema,
   execute: async (input, { context }) => {
+    const specialRequests = cleanString(input.specialRequests);
+
     const reservation = await reservationRepo.create({
       restaurantId: context.restaurantId,
       customerPhone: context.customerPhone,
       date: input.date,
       time: input.time,
       partySize: input.partySize,
-      ...(input.specialRequests ? { specialRequests: input.specialRequests } : {}),
+      ...(specialRequests ? { specialRequests } : {}),
     });
 
     return {

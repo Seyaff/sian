@@ -1,9 +1,5 @@
 import { z } from "zod";
-
-export const restaurantContextSchema = z.object({
-  restaurantId: z.string().trim().min(1),
-  customerPhone: z.string().trim().min(1),
-});
+import { nullableString } from "../utils/zod-helpers";
 
 export const placeOrderInputSchema = z.object({
   items: z
@@ -11,27 +7,32 @@ export const placeOrderInputSchema = z.object({
       z.object({
         name: z.string().trim().min(1),
         quantity: z.number().int().positive(),
-        price: z.number().nonnegative().optional(),
-        notes: z.string().trim().optional(),
+        price: z.union([z.number().nonnegative(), z.null()]).optional(),
+        notes: nullableString(),
       })
     )
     .min(1),
   orderType: z.enum(["pickup", "delivery"]).default("pickup"),
-  deliveryAddress: z.string().trim().optional(),
-  specialInstructions: z.string().trim().optional(),
+  deliveryAddress: nullableString(),
+  specialInstructions: nullableString(),
   estimatedPrepMinutes: z
-    .number()
-    .int()
-    .positive()
+    .union([z.number().int().positive(), z.null()])
     .optional()
     .describe("Estimated preparation time in minutes, e.g. 30"),
 });
+
+export const restaurantContextSchema = z.object({
+  restaurantId: z.string().trim().min(1),
+  customerPhone: z.string().trim().min(1),
+});
+
+export const proposeOrderInputSchema = placeOrderInputSchema;
 
 export const reserveTableInputSchema = z.object({
   date: z.string().trim().min(1).describe("Reservation date, e.g. 2026-08-28"),
   time: z.string().trim().min(1).describe("Reservation time, e.g. 7:30 PM"),
   partySize: z.number().int().positive(),
-  specialRequests: z.string().trim().optional(),
+  specialRequests: nullableString(),
 });
 
 export const createRestaurantSchema = z.object({
@@ -39,7 +40,7 @@ export const createRestaurantSchema = z.object({
   slug: z.string().trim().min(1),
   whatsappPhoneNumberId: z.string().trim().min(1),
   pineconeNamespace: z.string().trim().min(1),
-  greetingMessage: z.string().trim().optional(),
+  greetingMessage: nullableString(),
   isActive: z.boolean().optional().default(true),
 });
 

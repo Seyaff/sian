@@ -1,23 +1,22 @@
-import { z } from "zod";
 import { tool } from "ai";
 import { MenuRepository } from "../../repositories/menu/menu.repository";
 import { knowledgeBaseContextSchema } from "../../validators/rag.validation";
+import { getMenuInputSchema } from "./get-menu.schema";
 
 const menuRepo = new MenuRepository();
 
-export const getMenuInputSchema = z.object({
-  category: z.string().trim().optional().describe("Menu category to fetch, e.g. BBQ, Starters"),
-});
+export { getMenuInputSchema } from "./get-menu.schema";
 
 export const getMenuTool = tool({
   contextSchema: knowledgeBaseContextSchema,
   description: "Get structured menu items by category or all categories for the restaurant.",
   inputSchema: getMenuInputSchema,
   execute: async ({ category }, { context }) => {
-    if (category) {
-      const items = await menuRepo.getByCategory(context.restaurantId, category);
+    const normalized = typeof category === "string" ? category.trim() : "";
+    if (normalized) {
+      const items = await menuRepo.getByCategory(context.restaurantId, normalized);
       return {
-        category,
+        category: normalized,
         items: items.map((item) => ({
           name: item.name,
           price: item.price,

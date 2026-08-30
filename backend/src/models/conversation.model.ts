@@ -1,6 +1,7 @@
 import mongoose, { Document, Schema } from "mongoose";
 import { ModelMessage } from "ai";
 import { SessionState } from "../domain/types/session-state.types";
+import { PendingApproval } from "../domain/types/pending-approval.types";
 
 export interface IConversation extends Document {
   sessionId: string;
@@ -10,10 +11,7 @@ export interface IConversation extends Document {
   messages: ModelMessage[];
   sessionState?: SessionState;
   archived: boolean;
-  pendingApproval?: {
-    approvalId: string;
-    toolCall: { toolCallId: string; toolName: string };
-  };
+  pendingApproval?: PendingApproval;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -48,6 +46,7 @@ const pendingApprovalSchema = new Schema(
     toolCall: {
       toolCallId: { type: String, required: true },
       toolName: { type: String, required: true },
+      input: { type: Schema.Types.Mixed, required: true },
     },
   },
   { _id: false }

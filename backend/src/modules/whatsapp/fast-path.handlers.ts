@@ -7,12 +7,23 @@ import {
   CATEGORY_ID_MAP,
   DEFAULT_MENU_CATEGORIES,
 } from "../../services/menu/menu-parser.service";
+import { formatCategoryList } from "../../utils/whatsapp-formatting";
 
 const menuRepo = new MenuRepository();
 
 const RAG_QUERIES: Record<string, string> = {
   hours: "What are the opening hours and closing time?",
   location: "What is the restaurant address and location?",
+};
+
+const MENU_SUGGESTIONS: Record<string, string> = {
+  BBQ: "Chicken Tikka — soft aur juicy, bestseller hai 🍗",
+  Starters: "Soup of the Day try karein — light aur tasty",
+  "Main Course": "Muttar Karahi half — yahan ki sab se zyada pasandeeda dish hai 🔥",
+  Biryani: "Chicken Biryani — full portion, 2 log ke liye perfect",
+  Bread: "Garlic Naan — karahi ke sath zabardast jata hai",
+  Drinks: "Mango Lassi — thandi aur refreshing 😊",
+  Desserts: "Kheer — meetha khatam karne ke liye",
 };
 
 async function cachedRetrieve(restaurantId: string, query: string) {
@@ -26,13 +37,17 @@ async function cachedRetrieve(restaurantId: string, query: string) {
 function formatMenuItems(
   items: Array<{ name: string; priceLabel?: string; price?: number }>
 ): string {
-  if (items.length === 0) return "Is category mein abhi items available nahi hain.";
+  if (items.length === 0) return "";
   return items
     .map((item) => {
       const price = item.priceLabel || (item.price ? `Rs ${item.price}` : "");
       return `• *${item.name}*${price ? ` — ${price}` : ""}`;
     })
     .join("\n");
+}
+
+function pickSuggestion(category: string): string {
+  return MENU_SUGGESTIONS[category] ?? "Muttar Karahi — aaj try karein, bahut pasand aayegi 🔥";
 }
 
 export class FastPathHandlers {
@@ -51,41 +66,26 @@ export class FastPathHandlers {
   }
 
   async sendWelcome(isReturning = false): Promise<void> {
-    const greeting = isReturning
-      ? `Welcome back! *${this.restaurantName}* mein phir khush amdeed!`
-      : `Assalam o Alaikum! *${this.restaurantName}* mein khush amdeed!`;
+    const text = isReturning
+      ? `Assalam o Alaikum! 😊\n*${this.restaurantName}* mein phir khush amdeed!\nAaj kya mood hai — kuch spicy, BBQ, ya karahi?`
+      : `Assalam o Alaikum! 😊\n*${this.restaurantName}* mein khush amdeed!\nMenu dekhna hai, order karna hai, ya table book karni hai?`;
 
-    await this.reply(
-      `${greeting}\nAaj kya chahiye? [Buttons: Menu, Order, Table Book]`,
-      () =>
-        this.composer.sendButtons(`${greeting}\n\nAaj kya chahiye?`, [
-          { id: "action_menu", title: "Menu" },
-          { id: "action_order", title: "Order" },
-          { id: "action_book", title: "Table Book" },
-        ])
-    );
+    await this.reply(text, () => this.composer.sendText(text));
   }
 
   async sendMenuCategories(): Promise<void> {
     await this.sessionWriter?.updateSessionState({ currentIntent: "browsing" });
 
     const dbCategories = await menuRepo.getCategories(this.restaurantId);
-    const rows =
+    const names =
       dbCategories.length > 0
-        ? dbCategories.slice(0, 10).map((cat) => ({
-            id: `cat_${cat.toLowerCase().replace(/\s+/g, "_")}`,
-            title: cat,
-            description: `${cat} items`,
-          }))
-        : DEFAULT_MENU_CATEGORIES;
+        ? dbCategories.slice(0, 8)
+        : DEFAULT_MENU_CATEGORIES.map((c) => c.title);
 
-    await this.reply("[Showed menu category list]", () =>
-      this.composer.sendList(
-        "Yeh hain hamari categories — neeche se select karein:",
-        "View Menu",
-        [{ title: "Menu Categories", rows }]
-      )
-    );
+    const list = formatCategoryList(names);
+    const text = `Yeh hain hamari categories:\n\n${list}\n\n💡 Aaj *Muttar Karahi* try karein — sab se zyada order hoti hai.\n\nKoi category bata dein ya seedha dish ka naam likh dein 😊`;
+
+    await this.reply(text, () => this.composer.sendText(text));
   }
 
   async sendCategoryMenu(categoryId: string): Promise<void> {
@@ -100,11 +100,14 @@ export class FastPathHandlers {
     const items = await menuRepo.getByCategory(this.restaurantId, categoryName);
 
     if (items.length > 0) {
-      const text = `*${categoryName}*\n\n${formatMenuItems(items)}\n\nItem ka naam likhein ya Order dabayein!`;
-      await this.reply(`[Showed ${categoryName} menu — ${items.length} items]`, async () => {
+      const menuText = formatMenuItems(items.slice(0, 10));
+      const suggestion = pickSuggestion(categoryName);
+      const text = `*${categoryName}* 🍽️\n\n${menuText}\n\n_${suggestion}_\n\nJo pasand ho naam likh dein — main order set kar deta hoon.`;
+
+      await this.reply(`[Showed ${categoryName} menu]`, async () => {
         await this.composer.sendText(text);
         const withImages = items.filter((item) => item.imageUrl);
-        for (const item of withImages.slice(0, 3)) {
+        for (const item of withImages.slice(0, 2)) {
           if (item.imageUrl) {
             await this.composer.sendImage(
               item.imageUrl,
@@ -112,10 +115,6 @@ export class FastPathHandlers {
             );
           }
         }
-        await this.composer.sendButtons("Kya order karna hai?", [
-          { id: "action_order", title: "Order Now" },
-          { id: "action_menu", title: "More Menu" },
-        ]);
       });
       return;
     }
@@ -124,82 +123,58 @@ export class FastPathHandlers {
     const context = formatRetrievedContext(chunks);
 
     if (!context) {
-      await this.reply(`[${categoryName} — no items found]`, () =>
-        this.composer.sendText(
-          `*${categoryName}* ke items abhi load nahi ho sakay.\nKoi specific dish ka naam likhein!`
-        )
-      );
+      const text = `*${categoryName}* ke items abhi load nahi ho sakay.\nKoi dish ka naam likh dein — main check karta hoon 😊`;
+      await this.reply(text, () => this.composer.sendText(text));
       return;
     }
 
-    await this.reply(`[Showed ${categoryName} from knowledge base]`, async () => {
-      await this.composer.sendText(
-        `*${categoryName}*\n\n${context.slice(0, 3500)}\n\n_Item ka naam likhein ya Order dabayein!_`
-      );
-      await this.composer.sendButtons("Agla step?", [
-        { id: "action_order", title: "Order Now" },
-        { id: "action_menu", title: "More Menu" },
-      ]);
-    });
+    const suggestion = pickSuggestion(categoryName);
+    const text = `*${categoryName}* 🍽️\n\n${context}\n\n_${suggestion}_\n\nJo order karna ho likh dein.`;
+
+    await this.reply(`[Showed ${categoryName} from knowledge base]`, () =>
+      this.composer.sendText(text)
+    );
   }
 
   async sendHours(): Promise<void> {
     const chunks = await cachedRetrieve(this.restaurantId, RAG_QUERIES.hours!);
     const context = formatRetrievedContext(chunks);
-    await this.reply("[Showed opening hours]", async () => {
-      await this.composer.sendText(
-        context
-          ? `*Opening Hours*\n\n${context.slice(0, 500)}\n\nOrder karna hai?`
-          : "Timing ke liye humein call karein."
-      );
-      await this.composer.sendButtons("Kya karna hai?", [
-        { id: "action_order", title: "Order" },
-        { id: "action_menu", title: "Menu" },
-      ]);
-    });
+    const text = context
+      ? `*Opening Hours* 🕐\n\n${context.slice(0, 400)}`
+      : "Timing ke liye humein call karein — hum help kar denge.";
+
+    await this.reply(text, () => this.composer.sendText(text));
   }
 
   async sendLocation(): Promise<void> {
     const chunks = await cachedRetrieve(this.restaurantId, RAG_QUERIES.location!);
     const context = formatRetrievedContext(chunks);
-    await this.reply("[Showed location/address]", async () => {
-      await this.composer.sendText(
-        context ? `*Location*\n\n${context.slice(0, 500)}` : "Address ke liye humein call karein."
-      );
-      await this.composer.sendButtons("Aur kuch?", [
-        { id: "action_order", title: "Order" },
-        { id: "action_menu", title: "Menu" },
-      ]);
-    });
+    const text = context
+      ? `*Location* 📍\n\n${context.slice(0, 400)}`
+      : "Address ke liye humein call karein.";
+
+    await this.reply(text, () => this.composer.sendText(text));
   }
 
   async sendOrderPrompt(): Promise<void> {
     await this.sessionWriter?.updateSessionState({ currentIntent: "ordering" });
-    await this.reply("[Prompted for order details]", async () => {
-      await this.composer.sendText(
-        "Zabardast!\nApna order likhein — masalan:\n*2 Chicken Tikka, 1 Naan, takeaway*"
-      );
-      await this.composer.sendButtons("Ya menu se choose karein:", [
-        { id: "action_menu", title: "View Menu" },
-        { id: "action_book", title: "Book Table" },
-      ]);
-    });
+    const text =
+      "Bilkul! 😊\nApna order likh dein — masalan:\n*2 Chicken Tikka, 1 Naan, takeaway*\n\nYa agar confused hain to bata dein kitne log hain, main suggest karunga.";
+
+    await this.reply(text, () => this.composer.sendText(text));
   }
 
   async sendReservationPrompt(): Promise<void> {
     await this.sessionWriter?.updateSessionState({ currentIntent: "booking" });
-    await this.reply("[Prompted for table reservation]", () =>
-      this.composer.sendText(
-        "Table book karna hai?\nDate, time aur kitne log — likh dein.\nMasalan: *Kal 8 PM, 4 log*"
-      )
-    );
+    const text =
+      "Table book karte hain 😊\nDate, time aur kitne log — likh dein.\nMasalan: *Kal 8 PM, 4 log*";
+
+    await this.reply(text, () => this.composer.sendText(text));
   }
 
   async sendAgentHandoff(): Promise<void> {
-    await this.reply("[Handoff to human staff]", () =>
-      this.composer.sendText(
-        "Theek hai!\nHamara staff jald contact karega.\nTab tak menu ya order ke liye yahan message karein."
-      )
-    );
+    const text =
+      "Theek hai — hamara staff jald contact karega.\nTab tak yahan message karte rahiye agar kuch chahiye.";
+    await this.reply(text, () => this.composer.sendText(text));
   }
 }

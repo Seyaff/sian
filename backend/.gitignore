@@ -141,3 +141,7 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Client menu PDFs (keep folder via .gitkeep)
+uploads/*
+!uploads/.gitkeep

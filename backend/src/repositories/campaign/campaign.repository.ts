@@ -16,7 +16,7 @@ export class CampaignRepository {
     status: ICampaign["status"],
     extra: Partial<ICampaign> = {}
   ): Promise<ICampaign | null> {
-    return CampaignModel.findByIdAndUpdate(id, { $set: { status, ...extra } }, { new: true }).lean();
+    return CampaignModel.findByIdAndUpdate(id, { $set: { status, ...extra } }, { returnDocument: "after" as const }).lean();
   }
 
   async updateStats(

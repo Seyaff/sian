@@ -4,7 +4,7 @@ import {
   getWhatsAppSession,
   updateWhatsAppSession,
 } from "./whatsapp-session";
-import { SessionState, defaultSessionState } from "../domain/types/session-state.types";
+import { SessionState, defaultSessionState, normalizeSessionState } from "../domain/types/session-state.types";
 
 export class SessionWriter {
   constructor(
@@ -27,7 +27,7 @@ export class SessionWriter {
 
   async updateSessionState(partial: Partial<SessionState>): Promise<void> {
     const session = await getWhatsAppSession(this.phone, this.restaurantId);
-    const current = session.sessionState ?? defaultSessionState();
+    const current = normalizeSessionState(session.sessionState);
     await updateWhatsAppSession(this.phone, this.restaurantId, {
       sessionState: {
         ...current,
@@ -43,12 +43,12 @@ export class SessionWriter {
 
   async getSessionState(): Promise<SessionState> {
     const session = await getWhatsAppSession(this.phone, this.restaurantId);
-    return session.sessionState ?? defaultSessionState();
+    return normalizeSessionState(session.sessionState);
   }
 
   private async touchActivity(): Promise<void> {
     const session = await getWhatsAppSession(this.phone, this.restaurantId);
-    const current = session.sessionState ?? defaultSessionState();
+    const current = normalizeSessionState(session.sessionState);
     await updateWhatsAppSession(this.phone, this.restaurantId, {
       sessionState: { ...current, lastActivityAt: new Date() },
     });

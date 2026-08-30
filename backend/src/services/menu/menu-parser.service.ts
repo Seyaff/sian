@@ -12,6 +12,7 @@ const CATEGORY_KEYWORDS: Record<string, RegExp[]> = {
 
 const PRICE_PATTERN = /(?:rs\.?|pkr)\s*([\d,]+(?:\.\d+)?)|([\d,]+(?:\.\d+)?)\s*(?:rs\.?|pkr)/i;
 const ITEM_LINE_PATTERN = /^[\-\*\u2022]?\s*(.+?)(?:\s+[\-\u2013]\s+|\s{2,})(?:rs\.?|pkr)?\s*([\d,]+(?:\.\d+)?)/i;
+const SKU_LINE_PATTERN = /^DP-\d+\s+(.+?)\s+(?:Rs\.?|PKR)?\s*([\d,]+(?:\.\d+)?)/i;
 
 function guessCategory(line: string, currentCategory: string): string {
   for (const [category, patterns] of Object.entries(CATEGORY_KEYWORDS)) {
@@ -50,6 +51,24 @@ export function parseMenuFromText(text: string, restaurantId: string): CreateMen
       /^[A-Z][A-Za-z\s&]+$/.test(line)
     ) {
       currentCategory = guessCategory(line, line);
+      continue;
+    }
+
+    const skuMatch = line.match(SKU_LINE_PATTERN);
+    if (skuMatch) {
+      const name = skuMatch[1]!.trim();
+      const price = Number(skuMatch[2]!.replace(/,/g, ""));
+      const key = `${currentCategory}:${name.toLowerCase()}`;
+      if (!seen.has(key) && name.length > 2) {
+        seen.add(key);
+        items.push({
+          restaurantId,
+          name,
+          category: currentCategory,
+          price,
+          priceLabel: `Rs ${price}`,
+        });
+      }
       continue;
     }
 

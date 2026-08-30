@@ -1,16 +1,14 @@
 import { ModelMessage } from "ai";
 import { ConversationRepository, ConversationData } from "../repositories/conversation/conversation.repository";
 import { buildSessionId } from "../utils/session";
-import { SessionState, defaultSessionState } from "../domain/types/session-state.types";
+import { SessionState, defaultSessionState, normalizeSessionState } from "../domain/types/session-state.types";
+import { PendingApproval } from "../domain/types/pending-approval.types";
 
 export interface WhatsAppSessionData {
   messages: ModelMessage[];
   restaurantId: string;
   sessionState?: SessionState;
-  pendingApproval?: {
-    approvalId: string;
-    toolCall: { toolCallId: string; toolName: string };
-  };
+  pendingApproval?: PendingApproval;
 }
 
 const conversationRepo = new ConversationRepository();
@@ -25,12 +23,16 @@ async function getFromDb(sessionId: string): Promise<WhatsAppSessionData | null>
     const result: WhatsAppSessionData = {
       messages: conv.messages,
       restaurantId: conv.restaurantId,
-      sessionState: conv.sessionState ?? defaultSessionState(),
+      sessionState: normalizeSessionState(conv.sessionState),
     };
-    if (conv.pendingApproval) {
+    if (conv.pendingApproval?.toolCall?.input != null) {
       result.pendingApproval = {
         approvalId: conv.pendingApproval.approvalId,
-        toolCall: conv.pendingApproval.toolCall,
+        toolCall: {
+          toolCallId: conv.pendingApproval.toolCall.toolCallId,
+          toolName: conv.pendingApproval.toolCall.toolName,
+          input: conv.pendingApproval.toolCall.input as Record<string, unknown>,
+        },
       };
     }
     return result;
@@ -106,11 +108,10 @@ export async function updateWhatsAppSession(
 export async function setPendingApproval(
   phone: string,
   restaurantId: string,
-  approvalId: string,
-  toolCall: { toolCallId: string; toolName: string },
+  pendingApproval: PendingApproval,
   platform: "whatsapp" | "api" = "whatsapp"
 ): Promise<void> {
-  await updateWhatsAppSession(phone, restaurantId, { pendingApproval: { approvalId, toolCall } }, platform);
+  await updateWhatsAppSession(phone, restaurantId, { pendingApproval }, platform);
 }
 
 export async function clearPendingApproval(
