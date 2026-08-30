@@ -7,12 +7,12 @@ import { getWhatsAppSession } from "../../memory/whatsapp-session";
 import { SessionWriter } from "../../memory/session-writer";
 import { AgentChatResponse, CustomToolApprovalResponse } from "../agent/agent.service";
 import { WhatsAppComposer } from "./whatsapp.composer";
-import { IntentRouter } from "./intent.router";
-import { FastPathHandlers } from "./fast-path.handlers";
+import { resolveLegacyActionToText } from "./legacy-actions";
 import { isActionId } from "../../utils/language-normalizer";
 import { isStaffPhone } from "../../utils/staff-phones";
 import { OrderService } from "../../services/order/order.service";
 import { profileExtractorService } from "../../services/memory/profile-extractor.service";
+import { formatAgentReply } from "../../utils/whatsapp-formatting";
 
 const processedMessageIds = new Map<string, number>();
 const MESSAGE_ID_TTL_MS = 5 * 60 * 1000;
@@ -35,7 +35,6 @@ export class WhatsappService {
   private agentService = new AgentService();
   private customerService = new CustomerService();
   private restaurantService = new RestaurantService();
-  private intentRouter = new IntentRouter();
   private orderService = new OrderService();
 
   private getHeaders() {
@@ -68,9 +67,10 @@ export class WhatsappService {
     } = {}
   ): Promise<void> {
     if (options.messageId && isDuplicateMessage(options.messageId)) {
-      console.log("[WHATSAPP] Duplicate message skipped:", options.messageId);
       return;
     }
+
+    console.log("text : " , text)
 
     const restaurantId = await this.resolveRestaurantId(options);
 
@@ -88,16 +88,36 @@ export class WhatsappService {
 
     const session = await getWhatsAppSession(to, restaurantId);
 
-    if (session.pendingApproval && isActionId(text)) {
-      await this.handleApprovalResponse(to, text, restaurantId, options.whatsappPhoneNumberId);
+    if (session.pendingApproval) {
+      if (isActionId(text)) {
+        await this.handleApprovalResponse(to, text, restaurantId, options.whatsappPhoneNumberId);
+        return;
+      }
+
+      const composer = this.createComposer(to, options.whatsappPhoneNumberId);
+      const sessionWriter = new SessionWriter(to, restaurantId);
+      await sessionWriter.appendUserMessage(text);
+
+      if (/^(cancel|nahi|na|band|ruk|stop)$/i.test(text.trim())) {
+        const response = await this.agentService.handleApprovalDecision(to, false, {
+          restaurantId,
+          phone: to,
+        });
+        await composer.sendText(response.text);
+        return;
+      }
+
+      const toolName = session.pendingApproval.toolCall.toolName;
+      const approvalText =
+        toolName === "placeOrderTool"
+          ? "Aapka order abhi confirm nahi hua. Neeche approve ya deny karein 👇"
+          : "Yeh abhi confirm nahi hua. Neeche approve ya deny karein 👇";
+
+      await composer.sendApproval(approvalText, session.pendingApproval.approvalId);
       return;
     }
 
     const sessionWriter = new SessionWriter(to, restaurantId);
-    const composer = this.createComposer(to, options.whatsappPhoneNumberId);
-    const handlers = new FastPathHandlers(composer, restaurantId, sessionWriter);
-    const { isNew } = await this.customerService.findOrCreate(to, restaurantId);
-    const isFirstMessage = session.messages.length === 0 && !options.isInteractive;
 
     await profileExtractorService.extractFromMessage(to, restaurantId, text);
 
@@ -109,17 +129,10 @@ export class WhatsappService {
       });
     }
 
-    const routeResult = await this.intentRouter.route(text, handlers, {
-      isNewCustomer: isNew,
-      isFirstMessage,
-    });
+    const legacyText = resolveLegacyActionToText(text);
+    const agentQuery = legacyText ?? text;
 
-    if (routeResult.handled) {
-      await sessionWriter.appendUserMessage(text);
-      return;
-    }
-
-    const response = await this.agentService.chat(to, text, {
+    const response = await this.agentService.chat(to, agentQuery, {
       restaurantId,
       phone: to,
     });
@@ -187,19 +200,12 @@ export class WhatsappService {
     whatsappPhoneNumberId?: string
   ): Promise<void> {
     const composer = this.createComposer(to, whatsappPhoneNumberId);
-    const sessionWriter = new SessionWriter(to, restaurantId);
 
     if (response.status === "REQUIRES_APPROVAL") {
       await this.sendApprovalButtons(composer, response);
     } else {
-      const text = response.text || "Done! Kuch aur chahiye?";
+      const text = formatAgentReply(response.text || "Theek hai! Aur kuch chahiye to likh dein 😊");
       await composer.sendText(text);
-      await composer.sendButtons("Agla step?", [
-        { id: "action_order", title: "Order" },
-        { id: "action_menu", title: "Menu" },
-        { id: "action_book", title: "Book Table" },
-      ]);
-      await sessionWriter.appendAssistantMessage("[Buttons: Order, Menu, Book Table]");
     }
   }
 
@@ -209,10 +215,10 @@ export class WhatsappService {
   ): Promise<void> {
     const approvalText =
       response.toolCall.toolName === "placeOrderTool"
-        ? "Order confirm karein?"
-        : "Yeh action approve karein?";
+        ? "Yeh order theek hai? Confirm karein 👇"
+        : "Yeh theek lag raha hai? Confirm karein 👇";
 
-    await composer.sendApproval(`${approvalText}\n\nProceed karna hai?`, response.approvalId);
+    await composer.sendApproval(approvalText, response.approvalId);
   }
 
   private async handleApprovalResponse(
@@ -228,16 +234,25 @@ export class WhatsappService {
     const approvalId = buttonId.slice(separatorIndex + 1);
     if (!approvalId) return;
 
+    const session = await getWhatsAppSession(to, restaurantId);
+    if (!session.pendingApproval || session.pendingApproval.approvalId !== approvalId) {
+      const composer = this.createComposer(to, whatsappPhoneNumberId);
+      await composer.sendText("Yeh confirmation expire ho chuki hai. Dobara order likh dein.");
+      return;
+    }
+
     const approved = action === "approve";
     const sessionWriter = new SessionWriter(to, restaurantId);
-    await sessionWriter.appendUserMessage(buttonId);
+    await sessionWriter.appendUserMessage(approved ? "Approve" : "Deny");
 
-    const response = await this.agentService.respondToApproval(to, approvalId, approved, undefined, {
+    const response = await this.agentService.handleApprovalDecision(to, approved, {
       restaurantId,
       phone: to,
     });
 
-    await this.sendAgentResponse(to, response, restaurantId, whatsappPhoneNumberId);
+    const composer = this.createComposer(to, whatsappPhoneNumberId);
+    const text = formatAgentReply(response.text);
+    await composer.sendText(text);
   }
 
   private async postToWhatsApp(payload: object, whatsappPhoneNumberId?: string): Promise<void> {

@@ -25,15 +25,12 @@ export class AgentController {
   });
 
   handleApproval = asyncHandler(async (req: Request, res: Response) => {
-    const { sessionId = "default", approvalId, approved, reason, restaurantId, phone } = req.body;
+    const { sessionId = "default", approved, restaurantId, phone } = req.body;
 
-    const response = await this.agentService.respondToApproval(
-      sessionId,
-      approvalId,
-      approved,
-      reason,
-      { restaurantId, phone }
-    );
+    const response = await this.agentService.handleApprovalDecision(sessionId, Boolean(approved), {
+      restaurantId,
+      phone,
+    });
 
     return res.status(HTTPSTATUS.OK).json({
       message: "Approval processed",

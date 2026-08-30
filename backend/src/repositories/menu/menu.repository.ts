@@ -1,4 +1,5 @@
 import MenuItemModel, { IMenuItem } from "../../models/menu-item.model";
+import { findBestMenuMatch, rankMenuItems, MenuSearchMatch } from "../../utils/menu-search";
 
 export interface CreateMenuItemInput {
   restaurantId: string;
@@ -43,6 +44,24 @@ export class MenuRepository {
 
   async getAll(restaurantId: string): Promise<IMenuItem[]> {
     return MenuItemModel.find({ restaurantId, isAvailable: true }).sort({ category: 1, name: 1 }).lean();
+  }
+
+  async searchByName(
+    restaurantId: string,
+    query: string,
+    limit = 5
+  ): Promise<MenuSearchMatch[]> {
+    const items = await this.getAll(restaurantId);
+    return rankMenuItems(query, items, limit);
+  }
+
+  async findByName(
+    restaurantId: string,
+    query: string,
+    minConfidence = 0.5
+  ): Promise<MenuSearchMatch | null> {
+    const items = await this.getAll(restaurantId);
+    return findBestMenuMatch(query, items, minConfidence);
   }
 
   async getWithImages(restaurantId: string, category?: string): Promise<IMenuItem[]> {

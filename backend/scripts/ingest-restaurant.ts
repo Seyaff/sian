@@ -1,7 +1,11 @@
 import "dotenv/config";
 import path from "path";
+import dns from "dns"
 import connectDatabase from "../src/config/database.config";
 import { ingestPdfToPinecone } from "../src/services/rag/ingestion.service";
+
+
+dns.setServers(["1.1.1.1" , "8.8.8.8"])
 
 function parseArgs(argv: string[]) {
   const args: Record<string, string> = {};

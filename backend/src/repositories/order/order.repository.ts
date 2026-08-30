@@ -55,7 +55,7 @@ export class OrderRepository {
     return OrderModel.findByIdAndUpdate(
       orderId,
       { $set: { status, ...extra } },
-      { new: true }
+      { returnDocument: "after" as const }
     ).lean();
   }
 }

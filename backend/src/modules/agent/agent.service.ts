@@ -1,30 +1,31 @@
 import util from "util";
+import { randomUUID } from "crypto";
 
-import { ModelMessage, ToolApprovalResponse } from "ai";
+import { ModelMessage } from "ai";
 import { createRestaurantAgent } from "../../agents";
 import { Env } from "../../config/app.config";
+import { PendingApproval } from "../../domain/types/pending-approval.types";
 import { CustomerService } from "../customer/customer.service";
-import { trimMessagesForAgent } from "../../utils/message-trim";
+import { trimMessagesForAgent, toStoredAssistantMessage, extractAgentReplyText } from "../../utils/message-trim";
 import { memoryInjectorService } from "../../services/memory/memory-injector.service";
 import { profileExtractorService } from "../../services/memory/profile-extractor.service";
+import { toolApprovalService } from "../../services/approval/tool-approval.service";
 import { CustomerEventRepository } from "../../repositories/customer-event/customer-event.repository";
+import { SessionWriter } from "../../memory/session-writer";
 import {
   getWhatsAppSession,
   setPendingApproval,
-  clearPendingApproval,
   appendMessages,
   clearWhatsAppSession,
 } from "../../memory/whatsapp-session";
-import { SessionWriter } from "../../memory/session-writer";
 
 export interface AgentChatOptions {
   restaurantId?: string;
   phone?: string;
 }
 
-export interface CustomToolApprovalResponse extends ToolApprovalResponse {
+export interface CustomToolApprovalResponse {
   status: "REQUIRES_APPROVAL";
-  text?: string;
   approvalId: string;
   toolCall: {
     toolCallId: string;
@@ -35,10 +36,16 @@ export interface CustomToolApprovalResponse extends ToolApprovalResponse {
 export interface AgentCompletedResponse {
   status: "COMPLETED";
   text: string;
-  approvalId?: never;
 }
 
 export type AgentChatResponse = CustomToolApprovalResponse | AgentCompletedResponse;
+
+interface ProposeOrderToolOutput {
+  valid?: boolean;
+  pendingApproval?: boolean;
+  resolvedOrder?: Record<string, unknown>;
+  itemSummary?: string;
+}
 
 export class AgentService {
   constructor(
@@ -89,6 +96,20 @@ export class AgentService {
     }
   }
 
+  private findProposeOrderApproval(result: {
+    content: Array<{ type: string; toolName?: string; toolCallId?: string; output?: unknown }>;
+  }): { toolCallId: string; output: ProposeOrderToolOutput } | null {
+    for (const part of result.content) {
+      if (part.type !== "tool-result" || part.toolName !== "proposeOrderTool") continue;
+
+      const output = part.output as ProposeOrderToolOutput;
+      if (output?.valid && output.pendingApproval && output.resolvedOrder) {
+        return { toolCallId: part.toolCallId ?? randomUUID(), output };
+      }
+    }
+    return null;
+  }
+
   chat = async (
     sessionId: string,
     query: string,
@@ -106,71 +127,73 @@ export class AgentService {
     const agent = await this.buildAgent(restaurantId, phone);
     const result = await agent.generate({ messages: messagesWithUser });
 
-    await appendMessages(phone, restaurantId, result.responseMessages);
     console.log(util.inspect(result, { depth: null, colors: true }));
 
-    for (const part of result.content) {
-      if (part.type === "tool-approval-request" && !part.isAutomatic) {
-        const response: CustomToolApprovalResponse = {
-          status: "REQUIRES_APPROVAL",
-          type: "tool-approval-response",
-          approvalId: part.approvalId,
-          approved: false,
-          reason: "User will allow or deny the request",
-          toolCall: part.toolCall,
-        };
+    const proposal = this.findProposeOrderApproval(result);
+    if (proposal) {
+      const approvalId = `prop-${randomUUID()}`;
+      const pendingApproval: PendingApproval = {
+        approvalId,
+        toolCall: {
+          toolCallId: proposal.toolCallId,
+          toolName: "placeOrderTool",
+          input: proposal.output.resolvedOrder as Record<string, unknown>,
+        },
+      };
 
-        await setPendingApproval(phone, restaurantId, part.approvalId, part.toolCall);
-        await appendMessages(phone, restaurantId, [{ role: "tool", content: [response] }]);
+      await setPendingApproval(phone, restaurantId, pendingApproval);
 
-        return response;
-      }
+      const writer = new SessionWriter(phone, restaurantId);
+      const cartItems = (proposal.output.resolvedOrder as { items?: Array<{ name: string; quantity: number; price?: number }> })
+        .items ?? [];
+      await writer.updateSessionState({
+        currentIntent: "ordering",
+        cartDraft: cartItems.map((i) => ({
+          name: i.name,
+          quantity: i.quantity,
+          ...(i.price !== undefined ? { price: i.price } : {}),
+        })),
+      });
+
+      const summary =
+        proposal.output.itemSummary ??
+        toolApprovalService.buildSummary(pendingApproval);
+
+      await appendMessages(phone, restaurantId, [
+        toStoredAssistantMessage(`Order pending confirmation: ${summary}`),
+      ]);
+
+      return {
+        status: "REQUIRES_APPROVAL",
+        approvalId,
+        toolCall: {
+          toolCallId: proposal.toolCallId,
+          toolName: "placeOrderTool",
+        },
+      };
     }
+
+    const replyText = extractAgentReplyText(result);
+    await appendMessages(phone, restaurantId, [toStoredAssistantMessage(replyText)]);
 
     return {
       status: "COMPLETED",
-      text: result.text,
+      text: replyText,
     };
   };
 
-  respondToApproval = async (
+  handleApprovalDecision = async (
     sessionId: string,
-    approvalId: string,
     approved: boolean,
-    reason?: string,
     options: AgentChatOptions = {}
   ): Promise<AgentCompletedResponse> => {
     const restaurantId = this.resolveRestaurantId(options.restaurantId);
     const phone = options.phone ?? sessionId;
-
-    const approvalPayload: ToolApprovalResponse[] = [
-      {
-        type: "tool-approval-response",
-        approvalId,
-        approved,
-        reason: reason || (approved ? "Approved via WhatsApp" : "Denied by user"),
-      },
-    ];
-
-    await appendMessages(phone, restaurantId, [{ role: "tool", content: approvalPayload }]);
-    await clearPendingApproval(phone, restaurantId);
-
-    const updatedSession = await getWhatsAppSession(phone, restaurantId);
-    const agent = await this.buildAgent(restaurantId, phone);
-    const result = await agent.generate({
-      messages: trimMessagesForAgent(updatedSession.messages),
-    });
-
-    await appendMessages(phone, restaurantId, result.responseMessages);
-
-    if (approved && result.text) {
-      const writer = new SessionWriter(phone, restaurantId);
-      await writer.updateSessionState({ currentIntent: null, cartDraft: [] });
-    }
+    const text = await toolApprovalService.handleDecision(phone, restaurantId, approved);
 
     return {
       status: "COMPLETED",
-      text: result.text,
+      text,
     };
   };
 

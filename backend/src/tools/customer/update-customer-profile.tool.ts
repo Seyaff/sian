@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { tool } from "ai";
 import { CustomerRepository } from "../../repositories/customer/customer.repository";
+import { cleanString, nullableString } from "../../utils/zod-helpers";
 import { knowledgeBaseContextSchema } from "../../validators/rag.validation";
 
 const customerRepo = new CustomerRepository();
 
 export const updateCustomerProfileInputSchema = z.object({
-  name: z.string().trim().optional(),
+  name: nullableString(),
   dietary: z.array(z.string().trim()).optional(),
   favorites: z.array(z.string().trim()).optional(),
 });
@@ -19,8 +20,10 @@ export const updateCustomerProfileTool = tool({
     "Save customer name, dietary preferences, or favorite dishes when the customer shares them in conversation.",
   inputSchema: updateCustomerProfileInputSchema,
   execute: async (input, { context }) => {
+    const name = cleanString(input.name);
+
     const customer = await customerRepo.updateProfile(context.customerPhone, context.restaurantId, {
-      ...(input.name ? { name: input.name } : {}),
+      ...(name ? { name } : {}),
       ...(input.dietary ? { dietary: input.dietary } : {}),
       ...(input.favorites ? { favorites: input.favorites } : {}),
     });

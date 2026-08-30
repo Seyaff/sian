@@ -5,11 +5,14 @@ export type RouteResult =
   | { handled: true; intent: DetectedIntent | "action" }
   | { handled: false; intent: DetectedIntent };
 
+// Only these stay on fast-path (quick facts). Everything else goes to the agent for natural chat.
+const FAST_PATH_INTENTS = new Set<DetectedIntent>(["hours", "location"]);
+
 export class IntentRouter {
   async route(
     input: string,
     handlers: FastPathHandlers,
-    options: { isNewCustomer?: boolean; isFirstMessage?: boolean } = {}
+    _options: { isNewCustomer?: boolean; isFirstMessage?: boolean } = {}
   ): Promise<RouteResult> {
     if (isActionId(input)) {
       await this.handleAction(input, handlers);
@@ -18,43 +21,13 @@ export class IntentRouter {
 
     const intent = detectIntent(input);
 
-    if (options.isFirstMessage && (intent === "greeting" || intent === "unknown")) {
-      await handlers.sendWelcome(!options.isNewCustomer);
-      return { handled: true, intent: "greeting" };
+    if (FAST_PATH_INTENTS.has(intent)) {
+      if (intent === "hours") await handlers.sendHours();
+      if (intent === "location") await handlers.sendLocation();
+      return { handled: true, intent };
     }
 
-    switch (intent) {
-      case "greeting":
-        await handlers.sendWelcome();
-        return { handled: true, intent };
-
-      case "menu":
-        await handlers.sendMenuCategories();
-        return { handled: true, intent };
-
-      case "hours":
-        await handlers.sendHours();
-        return { handled: true, intent };
-
-      case "location":
-        await handlers.sendLocation();
-        return { handled: true, intent };
-
-      case "order":
-        await handlers.sendOrderPrompt();
-        return { handled: true, intent };
-
-      case "reservation":
-        await handlers.sendReservationPrompt();
-        return { handled: true, intent };
-
-      case "agent":
-        await handlers.sendAgentHandoff();
-        return { handled: true, intent };
-
-      default:
-        return { handled: false, intent: "unknown" };
-    }
+    return { handled: false, intent };
   }
 
   private async handleAction(actionId: string, handlers: FastPathHandlers): Promise<void> {
@@ -85,7 +58,6 @@ export class IntentRouter {
 
     if (actionId.startsWith("cat_")) {
       await handlers.sendCategoryMenu(actionId);
-      return;
     }
   }
 }

@@ -1,6 +1,7 @@
 import { ModelMessage } from "ai";
 import ConversationModel, { IConversation } from "../../models/conversation.model";
 import { SessionState } from "../../domain/types/session-state.types";
+import { PendingApproval } from "../../domain/types/pending-approval.types";
 
 export interface ConversationData {
   sessionId: string;
@@ -10,10 +11,7 @@ export interface ConversationData {
   messages: ModelMessage[];
   sessionState?: SessionState;
   archived?: boolean;
-  pendingApproval?: {
-    approvalId: string;
-    toolCall: { toolCallId: string; toolName: string };
-  };
+  pendingApproval?: PendingApproval;
 }
 
 export class ConversationRepository {
@@ -34,7 +32,7 @@ export class ConversationRepository {
     return ConversationModel.findOneAndUpdate(
       { sessionId },
       { $set: { messages, updatedAt: new Date() } },
-      { new: true }
+      { returnDocument: "after" as const }
     ).lean();
   }
 
@@ -45,7 +43,7 @@ export class ConversationRepository {
     return ConversationModel.findOneAndUpdate(
       { sessionId },
       { $set: { pendingApproval, updatedAt: new Date() } },
-      { new: true }
+      { returnDocument: "after" as const }
     ).lean();
   }
 
@@ -53,7 +51,7 @@ export class ConversationRepository {
     return ConversationModel.findOneAndUpdate(
       { sessionId },
       { $unset: { pendingApproval: "" }, $set: { updatedAt: new Date() } },
-      { new: true }
+      { returnDocument: "after" as const }
     ).lean();
   }
 
@@ -61,7 +59,7 @@ export class ConversationRepository {
     return ConversationModel.findOneAndUpdate(
       { sessionId: data.sessionId },
       { $set: { ...data, updatedAt: new Date() } },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" as const }
     ).lean();
   }
 
@@ -73,7 +71,7 @@ export class ConversationRepository {
     return ConversationModel.findOneAndUpdate(
       { sessionId },
       { $set: { archived: true, messages: [], updatedAt: new Date() } },
-      { new: true }
+      { returnDocument: "after" as const }
     ).lean();
   }
 

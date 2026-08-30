@@ -43,10 +43,20 @@ export const retrieveContext = async (
     });
 };
 
+import { formatRagMenuText } from "../../utils/whatsapp-formatting";
+
 export const formatRetrievedContext = (chunks: RetrievedChunk[]): string => {
   if (chunks.length === 0) {
     return "";
   }
 
-  return chunks.map((chunk) => chunk.text).join("\n---\n");
+  const raw = chunks.map((chunk) => chunk.text).join("\n");
+  const formatted = formatRagMenuText(raw, 15);
+
+  if (formatted) return formatted;
+
+  return chunks
+    .map((chunk) => chunk.text.replace(/\s+/g, " ").trim())
+    .filter((text) => text.length > 10)
+    .join("\n");
 };

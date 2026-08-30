@@ -52,11 +52,11 @@ export class MemoryInjectorService {
       if (sessionState.currentIntent) {
         lines.push(`- This session intent: ${sessionState.currentIntent}`);
       }
-      if (sessionState.cartDraft.length > 0) {
+      if (sessionState.cartDraft?.length) {
         const cart = sessionState.cartDraft.map((i) => `${i.quantity}x ${i.name}`).join(", ");
         lines.push(`- Cart draft: ${cart}`);
       }
-      if (sessionState.qualifyingAnswers.partySize) {
+      if (sessionState.qualifyingAnswers?.partySize) {
         lines.push(`- Party size: ${sessionState.qualifyingAnswers.partySize}`);
       }
     }
