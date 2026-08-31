@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "ingest": "tsx scripts/ingest-restaurant.ts",
     "eval-agent": "tsx scripts/eval-agent.ts",
+    "demo-prep": "tsx scripts/demo-prep.ts",
     "rag-test": "tsx src/config/pinecone.config.ts"
   },
   "keywords": [],
